@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 const enc = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
@@ -59,6 +59,8 @@ export async function GET(req: Request) {
     typeof expiresIn === "number"
       ? new Date(Date.now() + expiresIn * 1000).toISOString()
       : null;
+
+  const supabaseAdmin = getSupabaseAdmin();
 
   const { data: ca, error: caErr } = await supabaseAdmin
     .from("connected_accounts")
