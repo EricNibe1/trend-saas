@@ -1,72 +1,85 @@
 "use client";
 
-import { useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function AuthPage() {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  async function signUp() {
-    setLoading(true);
+  useEffect(() => {
+    let mounted = true;
+
+    async function boot() {
+      // If already logged in, go to /app
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.user) {
+        router.replace("/app");
+        return;
+      }
+      if (mounted) setReady(true);
+    }
+
+    boot();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) router.replace("/app");
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [router]);
+
+  async function signIn(e: React.FormEvent) {
+    e.preventDefault();
     setMsg(null);
-    const { error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    if (error) return setMsg(error.message);
-    setMsg("Signed up! Check your email if confirmation is enabled.");
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) setMsg(error.message);
+    // success redirects via onAuthStateChange
   }
 
-  async function signIn() {
-    setLoading(true);
-    setMsg(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) return setMsg(error.message);
-    router.push("/app");
-  }
+  if (!ready) return <div className="p-8">Loading…</div>;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="w-full max-w-sm space-y-3 rounded-xl border p-5">
-        <h1 className="text-xl font-semibold">Login / Signup</h1>
+      <form onSubmit={signIn} className="w-full max-w-sm border rounded-lg p-5 bg-white">
+        <div className="text-lg font-semibold mb-4">Sign in</div>
 
+        <label className="text-sm block mb-2">Email</label>
         <input
-          className="w-full rounded border p-2"
-          placeholder="email"
+          className="w-full border rounded px-3 py-2 mb-3"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          type="email"
+          required
         />
+
+        <label className="text-sm block mb-2">Password</label>
         <input
-          className="w-full rounded border p-2"
-          placeholder="password"
-          type="password"
+          className="w-full border rounded px-3 py-2 mb-4"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          type="password"
+          required
         />
 
-        <div className="flex gap-2">
-          <button
-            className="rounded border px-3 py-2"
-            onClick={signUp}
-            disabled={loading}
-          >
-            Sign up
-          </button>
-          <button
-            className="rounded border px-3 py-2"
-            onClick={signIn}
-            disabled={loading}
-          >
-            Sign in
-          </button>
-        </div>
+        {msg && <div className="text-sm mb-3">{msg}</div>}
 
-        {msg && <p className="text-sm opacity-80">{msg}</p>}
-      </div>
+        <button className="w-full border rounded px-3 py-2 hover:bg-gray-50" type="submit">
+          Sign in
+        </button>
+      </form>
     </div>
   );
 }
