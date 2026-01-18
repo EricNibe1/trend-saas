@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type ParsedRow = {
@@ -20,7 +20,6 @@ function parseCSV(text: string): { headers: string[]; rows: Record<string, strin
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter(Boolean);
   if (lines.length < 2) return { headers: [], rows: [] };
 
-  // Basic CSV parser (handles quoted commas)
   const splitLine = (line: string) => {
     const out: string[] = [];
     let cur = "";
@@ -28,8 +27,7 @@ function parseCSV(text: string): { headers: string[]; rows: Record<string, strin
 
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
-      if (ch === '"' ) {
-        // toggle quotes (double quote escape "")
+      if (ch === '"') {
         if (inQuotes && line[i + 1] === '"') {
           cur += '"';
           i++;
@@ -74,6 +72,9 @@ function pick(obj: Record<string, string>, keys: string[]) {
 }
 
 export default function ImportPage() {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const [dragOver, setDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [platform, setPlatform] = useState<"tiktok" | "instagram" | "facebook" | "youtube">("tiktok");
   const [rawPreview, setRawPreview] = useState<string | null>(null);
@@ -83,32 +84,61 @@ export default function ImportPage() {
   const sampleMappingHint = useMemo(() => {
     return (
       "Expected columns (any names are OK; we try common ones):\n" +
-      "- post id (e.g. Video ID)\n" +
+      "- post id (e.g. Video ID / Post ID / Content ID)\n" +
       "- date (YYYY-MM-DD) OR created time\n" +
       "- views, likes, comments, shares (optional)\n" +
-      "- caption, permalink (optional)\n"
+      "- caption/title, permalink/url (optional)\n"
     );
   }, []);
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    setStatus("");
-    const f = e.target.files?.[0];
-    if (!f) return;
-
-    setFileName(f.name);
-
-    const text = await f.text();
-    setRawPreview(text.slice(0, 1500));
-
-    const { rows } = parseCSV(text);
-
-    // Flexible mapping: tries common export column names
+  function mapRows(rows: Record<string, string>[]) {
     const mapped: ParsedRow[] = rows.map((r) => {
-      const platform_post_id = pick(r, ["Video ID", "video_id", "post_id", "id", "Post ID", "Content ID"]);
-      const created_time = pick(r, ["Created", "created_time", "Create time", "createdAt", "Publish time", "Published At"]);
+      const platform_post_id = pick(r, [
+        "Video ID",
+        "VideoId",
+        "videoId",
+        "video_id",
+        "Post ID",
+        "PostId",
+        "postId",
+        "post_id",
+        "Content ID",
+        "ContentId",
+        "contentId",
+        "content_id",
+        "ID",
+        "Id",
+        "id",
+      ]);
+
+      const created_time = pick(r, [
+        "Created",
+        "created_time",
+        "Create time",
+        "createdAt",
+        "Publish time",
+        "Published At",
+      ]);
+
       const date = pick(r, ["Date", "date", "Day"]);
-      const caption = pick(r, ["Caption", "caption", "Description", "description", "Title", "title"]);
-      const permalink = pick(r, ["Permalink", "permalink", "URL", "url", "Link", "link"]);
+
+      const caption = pick(r, [
+        "Caption",
+        "caption",
+        "Description",
+        "description",
+        "Title",
+        "title",
+      ]);
+
+      const permalink = pick(r, [
+        "Permalink",
+        "permalink",
+        "URL",
+        "url",
+        "Link",
+        "link",
+      ]);
 
       return {
         platform_post_id,
@@ -124,23 +154,50 @@ export default function ImportPage() {
       };
     });
 
-    // keep only rows with a post id
     const cleaned = mapped.filter((m) => m.platform_post_id);
-    setParsed(cleaned.slice(0, 500)); // MVP safety cap
+    setParsed(cleaned.slice(0, 500));
     setStatus(`Parsed ${cleaned.length} rows (showing first ${Math.min(cleaned.length, 500)}).`);
   }
 
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    setStatus("");
+    const f = e.target.files?.[0];
+    if (!f) return;
+
+    setFileName(f.name);
+
+    const text = await f.text();
+    setRawPreview(text.slice(0, 1500));
+
+    const { rows } = parseCSV(text);
+    mapRows(rows);
+  }
+
+  async function handleDroppedFile(f: File) {
+    setStatus("");
+    setFileName(f.name);
+
+    const text = await f.text();
+    setRawPreview(text.slice(0, 1500));
+
+    const { rows } = parseCSV(text);
+    mapRows(rows);
+  }
+
   async function uploadToSupabase() {
-    setStatus("Uploading...");
+    setStatus("Upload clicked…");
+
     try {
-      // 1) must be logged in
-      const { data: u } = await supabase.auth.getUser();
+      const { data: u, error: userErr } = await supabase.auth.getUser();
+      if (userErr) {
+        setStatus("Auth error: " + userErr.message);
+        return;
+      }
       if (!u.user) {
-        setStatus("Not logged in. Go to /auth first.");
+        setStatus("Not logged in. Go to /auth and sign in.");
         return;
       }
 
-      // 2) get org
       const { data: membership, error: memErr } = await supabase
         .from("memberships")
         .select("org_id")
@@ -148,18 +205,24 @@ export default function ImportPage() {
         .limit(1)
         .single();
 
-      if (memErr || !membership?.org_id) {
-        setStatus("Could not find org membership.");
+      if (memErr) {
+        setStatus("Membership query failed: " + memErr.message);
         return;
       }
+      if (!membership?.org_id) {
+        setStatus("No org membership found for this user.");
+        return;
+      }
+
       const orgId = membership.org_id as string;
 
       if (parsed.length === 0) {
-        setStatus("No parsed rows to upload.");
+        setStatus("Parsed 0 rows — upload disabled. Your CSV headers don't match.");
         return;
       }
 
-      // 3) upsert posts
+      setStatus(`Uploading ${parsed.length} rows…`);
+
       const postsPayload = parsed.map((r) => ({
         org_id: orgId,
         platform,
@@ -167,7 +230,7 @@ export default function ImportPage() {
         created_time: r.created_time ? new Date(r.created_time).toISOString() : null,
         caption: r.caption,
         permalink: r.permalink,
-        media_type: platform === "youtube" ? "video" : null,
+        media_type: null,
       }));
 
       const { data: postsUpserted, error: postErr } = await supabase
@@ -176,21 +239,18 @@ export default function ImportPage() {
         .select("id,platform_post_id");
 
       if (postErr) {
-        setStatus(`Posts upsert failed: ${postErr.message}`);
+        setStatus("Posts upsert failed: " + postErr.message);
         return;
       }
 
-      // Map platform_post_id -> post uuid
       const idMap = new Map<string, string>();
       (postsUpserted || []).forEach((p: any) => idMap.set(p.platform_post_id, p.id));
 
-      // 4) upsert daily metrics (use Date column if provided; else today)
       const today = new Date().toISOString().slice(0, 10);
       const metricsPayload = parsed
         .map((r) => {
           const postId = idMap.get(r.platform_post_id);
           if (!postId) return null;
-
           return {
             post_id: postId,
             date: r.date || today,
@@ -209,14 +269,14 @@ export default function ImportPage() {
           .upsert(metricsPayload, { onConflict: "post_id,date" });
 
         if (metErr) {
-          setStatus(`Metrics upsert failed: ${metErr.message}`);
+          setStatus("Metrics upsert failed: " + metErr.message);
           return;
         }
       }
 
-      setStatus(`✅ Uploaded ${postsPayload.length} posts and ${metricsPayload.length} daily metric rows.`);
+      setStatus(`✅ Uploaded ${postsPayload.length} posts and ${metricsPayload.length} metric rows.`);
     } catch (e: any) {
-      setStatus(`Upload error: ${e?.message ?? String(e)}`);
+      setStatus("Upload crashed: " + (e?.message ?? String(e)));
     }
   }
 
@@ -229,7 +289,7 @@ export default function ImportPage() {
         </p>
       </div>
 
-      <div className="rounded border p-4 space-y-3">
+      <div className="rounded border p-4 space-y-4">
         <div className="flex gap-2 items-center flex-wrap">
           <label className="text-sm opacity-80">Platform:</label>
           <select
@@ -244,16 +304,54 @@ export default function ImportPage() {
           </select>
         </div>
 
-        <input type="file" accept=".csv,text/csv" onChange={onFile} />
+        {/* Dropzone + Choose button */}
+        <div
+          className={`rounded border p-6 text-center space-y-3 ${dragOver ? "bg-gray-50" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={async (e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) await handleDroppedFile(f);
+          }}
+        >
+          <div className="font-semibold">Upload a CSV</div>
+          <div className="text-sm opacity-80">
+            Drag & drop your file here (desktop), or use the button below (works on mobile).
+          </div>
+
+          <button
+            type="button"
+            className="rounded border px-4 py-2 hover:bg-gray-50"
+            onClick={() => fileRef.current?.click()}
+          >
+            Choose CSV File
+          </button>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={onFile}
+          />
+
+          {fileName && <div className="text-sm">Selected: {fileName}</div>}
+        </div>
 
         <pre className="text-xs opacity-70 whitespace-pre-wrap">{sampleMappingHint}</pre>
 
-        {fileName && <div className="text-sm">File: {fileName}</div>}
         {status && <div className="text-sm">{status}</div>}
 
         <button
           onClick={uploadToSupabase}
-          className="rounded border px-4 py-2"
+          className={`rounded border px-4 py-2 ${
+            parsed.length === 0 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+          }`}
           disabled={parsed.length === 0}
         >
           Upload to Supabase
