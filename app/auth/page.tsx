@@ -15,12 +15,17 @@ export default function AuthPage() {
     let mounted = true;
 
     async function boot() {
+      // Probe (so you can see it in the Console)
+      const sessionRes = await supabase.auth.getSession();
+      console.log("AUTH SESSION:", sessionRes);
+
       // If already logged in, go to /app
-      const { data } = await supabase.auth.getSession();
-      if (data.session?.user) {
+      const session = sessionRes.data.session;
+      if (session?.user) {
         router.replace("/app");
         return;
       }
+
       if (mounted) setReady(true);
     }
 
@@ -53,7 +58,10 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
-      <form onSubmit={signIn} className="w-full max-w-sm border rounded-lg p-5 bg-white">
+      <form
+        onSubmit={signIn}
+        className="w-full max-w-sm border rounded-lg p-5 bg-white"
+      >
         <div className="text-lg font-semibold mb-4">Sign in</div>
 
         <label className="text-sm block mb-2">Email</label>
@@ -76,7 +84,10 @@ export default function AuthPage() {
 
         {msg && <div className="text-sm mb-3">{msg}</div>}
 
-        <button className="w-full border rounded px-3 py-2 hover:bg-gray-50" type="submit">
+        <button
+          className="w-full border rounded px-3 py-2 hover:bg-gray-50"
+          type="submit"
+        >
           Sign in
         </button>
       </form>
