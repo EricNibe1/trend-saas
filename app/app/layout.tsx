@@ -71,7 +71,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="border-b bg-white sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 flex-wrap">
-            <Link href="/app" className="font-semibold">TrendScope</Link>
+            <Link href="/app" className="font-semibold">
+              TrendScope
+            </Link>
 
             <div className="flex gap-2 flex-wrap">
               {links.map((l) => {
@@ -93,7 +95,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           <div className="flex items-center gap-3">
             {email && <div className="text-xs opacity-70 hidden sm:block">{email}</div>}
-            <button onClick={signOut} className="rounded border px-3 py-1 text-sm hover:bg-gray-50">
+            <button
+              onClick={signOut}
+              className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
+            >
               Sign out
             </button>
           </div>
