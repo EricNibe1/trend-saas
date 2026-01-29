@@ -11,66 +11,46 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-
-  // On-screen debug (so you don't need devtools)
-  const [sessionStatus, setSessionStatus] = useState<string>("(checking...)");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     let mounted = true;
 
     async function boot() {
-      const sessionRes = await supabase.auth.getSession();
+      try {
+        const sessionRes = await supabase.auth.getSession();
+        const session = sessionRes.data.session;
+        
+        console.log("Auth check:", { 
+          hasSession: !!session, 
+          user: session?.user?.email 
+        });
 
-      // Visible debug box so you can confirm env vars + session
-      if (mounted) {
-        setSessionStatus(
-          JSON.stringify(
-            {
-              hasSession: !!sessionRes.data.session,
-              sessionEmail: sessionRes.data.session?.user?.email ?? null,
-              urlPrefix: (process.env.NEXT_PUBLIC_SUPABASE_URL || "").slice(0, 35),
-              anonPrefix: (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").slice(0, 8),
-              anonLen: (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").length,
-            },
-            null,
-            2
-          )
-        );
+        if (session?.user && mounted) {
+          console.log("Session found, redirecting to /app");
+          router.replace("/app");
+          return;
+        }
+
+        if (mounted) setReady(true);
+      } catch (error) {
+        console.error("Boot error:", error);
+        if (mounted) {
+          setReady(true);
+          setMsg("Error checking session: " + (error as Error).message);
+        }
       }
-
-      // If already logged in, go to /app
-      const session = sessionRes.data.session;
-      if (session?.user) {
-        router.replace("/app");
-        return;
-      }
-
-      if (mounted) setReady(true);
     }
 
     boot();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("Auth state changed:", event, session?.user?.email);
+      
+      if (session?.user && mounted) {
+        console.log("User logged in, redirecting to /app");
         router.replace("/app");
-        return;
       }
-
-      // keep debug current if user signs out etc.
-      const sessionRes = await supabase.auth.getSession();
-      setSessionStatus(
-        JSON.stringify(
-          {
-            hasSession: !!sessionRes.data.session,
-            sessionEmail: sessionRes.data.session?.user?.email ?? null,
-            urlPrefix: (process.env.NEXT_PUBLIC_SUPABASE_URL || "").slice(0, 35),
-            anonPrefix: (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").slice(0, 8),
-            anonLen: (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").length,
-          },
-          null,
-          2
-        )
-      );
     });
 
     return () => {
@@ -82,63 +62,105 @@ export default function AuthPage() {
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
+    setIsSubmitting(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      console.log("Attempting sign in for:", email);
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (error) {
-      setMsg(error.message);
-      return;
+      if (error) {
+        console.error("Sign in error:", error);
+        setMsg("Error: " + error.message);
+        setIsSubmitting(false);
+        return;
+      }
+
+      console.log("Sign in success:", data.user?.email);
+
+      if (data.session?.user) {
+        console.log("Session created, redirecting to /app");
+        router.replace("/app");
+        return;
+      }
+
+      // Fallback check
+      const { data: s2 } = await supabase.auth.getSession();
+      if (s2.session?.user) {
+        console.log("Session found on recheck, redirecting to /app");
+        router.replace("/app");
+      } else {
+        console.error("Sign in succeeded but no session found");
+        setMsg("Sign in succeeded but session not created. Please try again.");
+        setIsSubmitting(false);
+      }
+    } catch (error) {
+      console.error("Sign in exception:", error);
+      setMsg("Error: " + (error as Error).message);
+      setIsSubmitting(false);
     }
-
-    // Force redirect immediately if session is returned
-    if (data.session?.user) {
-      router.replace("/app");
-      return;
-    }
-
-    // Fallback: sometimes session arrives a tick later
-    const { data: s2 } = await supabase.auth.getSession();
-    if (s2.session?.user) router.replace("/app");
   }
 
-  if (!ready) return <div className="p-8">Loading…</div>;
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-xl">Checking authentication...</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
+    <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
       <div className="w-full max-w-sm">
-        <pre className="text-xs border rounded p-3 bg-white mb-4 whitespace-pre-wrap">
-          {sessionStatus}
-        </pre>
+        <form onSubmit={signIn} className="border rounded-lg p-6 bg-white shadow-sm space-y-4">
+          <div className="text-2xl font-semibold text-center mb-2">Sign in to TrendScope</div>
 
-        <form onSubmit={signIn} className="border rounded-lg p-5 bg-white">
-          <div className="text-lg font-semibold mb-4">Sign in</div>
+          <div>
+            <label className="text-sm font-medium block mb-2">Email</label>
+            <input
+              className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              placeholder="you@example.com"
+              required
+              disabled={isSubmitting}
+            />
+          </div>
 
-          <label className="text-sm block mb-2">Email</label>
-          <input
-            className="w-full border rounded px-3 py-2 mb-3"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            required
-          />
+          <div>
+            <label className="text-sm font-medium block mb-2">Password</label>
+            <input
+              className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              placeholder="••••••••"
+              required
+              disabled={isSubmitting}
+            />
+          </div>
 
-          <label className="text-sm block mb-2">Password</label>
-          <input
-            className="w-full border rounded px-3 py-2 mb-4"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            required
-          />
+          {msg && (
+            <div className="text-sm p-3 rounded bg-red-50 border border-red-200 text-red-800">
+              {msg}
+            </div>
+          )}
 
-          {msg && <div className="text-sm mb-3">{msg}</div>}
-
-          <button className="w-full border rounded px-3 py-2 hover:bg-gray-50" type="submit">
-            Sign in
+          <button 
+            className="w-full bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            type="submit"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Signing in..." : "Sign in"}
           </button>
+          
+          <div className="text-xs text-center text-gray-500 mt-4">
+            Check browser console (F12) for debug info
+          </div>
         </form>
       </div>
     </div>
