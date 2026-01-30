@@ -4,12 +4,16 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+type AuthMode = "signin" | "signup";
+
 export default function AuthPage() {
   const router = useRouter();
 
+  const [mode, setMode] = useState<AuthMode>("signin");
   const [ready, setReady] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -20,14 +24,8 @@ export default function AuthPage() {
       try {
         const sessionRes = await supabase.auth.getSession();
         const session = sessionRes.data.session;
-        
-        console.log("Auth check:", { 
-          hasSession: !!session, 
-          user: session?.user?.email 
-        });
 
         if (session?.user && mounted) {
-          console.log("Session found, redirecting to /app");
           router.replace("/app");
           return;
         }
@@ -37,7 +35,7 @@ export default function AuthPage() {
         console.error("Boot error:", error);
         if (mounted) {
           setReady(true);
-          setMsg("Error checking session: " + (error as Error).message);
+          setMsg("Error checking session");
         }
       }
     }
@@ -45,10 +43,7 @@ export default function AuthPage() {
     boot();
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("Auth state changed:", event, session?.user?.email);
-      
       if (session?.user && mounted) {
-        console.log("User logged in, redirecting to /app");
         router.replace("/app");
       }
     });
@@ -59,109 +54,237 @@ export default function AuthPage() {
     };
   }, [router]);
 
-  async function signIn(e: React.FormEvent) {
+  async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setIsSubmitting(true);
 
     try {
-      console.log("Attempting sign in for:", email);
-      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (error) {
-        console.error("Sign in error:", error);
-        setMsg("Error: " + error.message);
+        setMsg(error.message);
         setIsSubmitting(false);
         return;
       }
-
-      console.log("Sign in success:", data.user?.email);
 
       if (data.session?.user) {
-        console.log("Session created, redirecting to /app");
         router.replace("/app");
+      }
+    } catch (error) {
+      setMsg("Sign in failed: " + (error as Error).message);
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleSignUp(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+
+    // Validation
+    if (password !== confirmPassword) {
+      setMsg("Passwords do not match");
+      return;
+    }
+
+    if (password.length < 6) {
+      setMsg("Password must be at least 6 characters");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/app`,
+        },
+      });
+
+      if (error) {
+        setMsg(error.message);
+        setIsSubmitting(false);
         return;
       }
 
-      // Fallback check
-      const { data: s2 } = await supabase.auth.getSession();
-      if (s2.session?.user) {
-        console.log("Session found on recheck, redirecting to /app");
-        router.replace("/app");
-      } else {
-        console.error("Sign in succeeded but no session found");
-        setMsg("Sign in succeeded but session not created. Please try again.");
+      // Check if email confirmation is required
+      if (data.user && !data.session) {
+        setMsg("Success! Check your email to confirm your account.");
         setIsSubmitting(false);
+        return;
+      }
+
+      // If auto-confirmed (some Supabase configs), create org membership
+      if (data.session?.user) {
+        // Create organization for new user
+        const { data: org, error: orgError } = await supabase
+          .from("organizations")
+          .insert({ name: `${email}'s Organization` })
+          .select("id")
+          .single();
+
+        if (orgError) {
+          console.error("Org creation error:", orgError);
+        } else if (org) {
+          // Create membership
+          await supabase.from("memberships").insert({
+            user_id: data.session.user.id,
+            org_id: org.id,
+            role: "owner",
+          });
+        }
+
+        router.replace("/app");
       }
     } catch (error) {
-      console.error("Sign in exception:", error);
-      setMsg("Error: " + (error as Error).message);
+      setMsg("Sign up failed: " + (error as Error).message);
       setIsSubmitting(false);
     }
   }
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-xl">Checking authentication...</div>
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+        <div className="text-[#00ff88] font-mono text-sm animate-pulse">
+          INITIALIZING...
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-      <div className="w-full max-w-sm">
-        <form onSubmit={signIn} className="border rounded-lg p-6 bg-white shadow-sm space-y-4">
-          <div className="text-2xl font-semibold text-center mb-2">Sign in to TrendScope</div>
+    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-6">
+      <div className="w-full max-w-md">
+        {/* Logo/Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold mb-2">
+            <span className="text-white">TREND</span>
+            <span className="text-[#00ff88]">SCOPE</span>
+          </h1>
+          <p className="text-sm text-gray-500 font-mono">
+            Intelligence Terminal v2.0
+          </p>
+        </div>
 
-          <div>
-            <label className="text-sm font-medium block mb-2">Email</label>
-            <input
-              className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              type="email"
-              placeholder="you@example.com"
-              required
-              disabled={isSubmitting}
-            />
+        {/* Auth Card */}
+        <div className="bg-gradient-to-br from-gray-900 to-black border border-gray-800 rounded-lg overflow-hidden">
+          {/* Mode Tabs */}
+          <div className="flex border-b border-gray-800">
+            <button
+              onClick={() => {
+                setMode("signin");
+                setMsg(null);
+              }}
+              className={`flex-1 py-3 text-sm font-mono transition-colors ${
+                mode === "signin"
+                  ? "bg-gray-900 text-[#00ff88] border-b-2 border-[#00ff88]"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              SIGN IN
+            </button>
+            <button
+              onClick={() => {
+                setMode("signup");
+                setMsg(null);
+              }}
+              className={`flex-1 py-3 text-sm font-mono transition-colors ${
+                mode === "signup"
+                  ? "bg-gray-900 text-[#00ff88] border-b-2 border-[#00ff88]"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              SIGN UP
+            </button>
           </div>
 
-          <div>
-            <label className="text-sm font-medium block mb-2">Password</label>
-            <input
-              className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              placeholder="••••••••"
-              required
-              disabled={isSubmitting}
-            />
-          </div>
-
-          {msg && (
-            <div className="text-sm p-3 rounded bg-red-50 border border-red-200 text-red-800">
-              {msg}
+          {/* Form */}
+          <form onSubmit={mode === "signin" ? handleSignIn : handleSignUp} className="p-6 space-y-4">
+            {/* Email */}
+            <div>
+              <label className="text-xs font-mono text-gray-500 block mb-2">EMAIL</label>
+              <input
+                className="w-full bg-black border border-gray-800 rounded px-4 py-3 text-white focus:outline-none focus:border-[#00ff88] transition-colors font-mono text-sm"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                type="email"
+                placeholder="operator@trendscope.io"
+                required
+                disabled={isSubmitting}
+              />
             </div>
-          )}
 
-          <button 
-            className="w-full bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-            type="submit"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Signing in..." : "Sign in"}
-          </button>
-          
-          <div className="text-xs text-center text-gray-500 mt-4">
-            Check browser console (F12) for debug info
-          </div>
-        </form>
+            {/* Password */}
+            <div>
+              <label className="text-xs font-mono text-gray-500 block mb-2">PASSWORD</label>
+              <input
+                className="w-full bg-black border border-gray-800 rounded px-4 py-3 text-white focus:outline-none focus:border-[#00ff88] transition-colors font-mono text-sm"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                type="password"
+                placeholder="••••••••"
+                required
+                disabled={isSubmitting}
+              />
+            </div>
+
+            {/* Confirm Password (Sign Up Only) */}
+            {mode === "signup" && (
+              <div>
+                <label className="text-xs font-mono text-gray-500 block mb-2">
+                  CONFIRM PASSWORD
+                </label>
+                <input
+                  className="w-full bg-black border border-gray-800 rounded px-4 py-3 text-white focus:outline-none focus:border-[#00ff88] transition-colors font-mono text-sm"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  type="password"
+                  placeholder="••••••••"
+                  required
+                  disabled={isSubmitting}
+                />
+              </div>
+            )}
+
+            {/* Error/Success Message */}
+            {msg && (
+              <div
+                className={`text-xs font-mono p-3 rounded border ${
+                  msg.includes("Success")
+                    ? "bg-[#00ff88]/10 border-[#00ff88]/30 text-[#00ff88]"
+                    : "bg-red-500/10 border-red-500/30 text-red-400"
+                }`}
+              >
+                {msg}
+              </div>
+            )}
+
+            {/* Submit Button */}
+            <button
+              className="w-full bg-[#00ff88] text-black rounded px-4 py-3 hover:bg-[#00ff88]/90 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm font-bold transition-all"
+              type="submit"
+              disabled={isSubmitting}
+            >
+              {isSubmitting
+                ? "PROCESSING..."
+                : mode === "signin"
+                ? "SIGN IN →"
+                : "CREATE ACCOUNT →"}
+            </button>
+          </form>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-6 text-center">
+          <p className="text-xs text-gray-600 font-mono">
+            By continuing, you agree to our Terms & Privacy Policy
+          </p>
+        </div>
       </div>
     </div>
   );
